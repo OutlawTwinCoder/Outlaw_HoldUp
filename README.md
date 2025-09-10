@@ -21,8 +21,6 @@ NPC Holdup & Pickpocket for ESX servers using ox_inventory, ox_target, with a po
 
 🎛️ ox_lib optionnel pour la progress bar (fallback intégré si absent).
 
-🧩 Code stylisé “Outlaw” (noms ambiguës, leurres) pour conserver une “patte” unique.
-
 ✅ Dépendances / Requirements
 
 ESX (gestion argent + job police)
