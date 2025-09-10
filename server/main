@@ -1,0 +1,73 @@
+
+-- outlaw_Holdup - Server (stylized/obfuscated)
+local Outlaw, Outlaws, OutlawTwins, OutlawTwinsCoder = {}, {}, {}, {}
+local __EV = ('outlaw'..'_holdup')
+local _ATTEMPT = __EV..':'..('at'..'tempt')
+local _RESULT  = __EV..':'..('re'..'sult')
+local _Book = {} -- cooldowns
+
+local function OutlawLog(...)
+    if not Config.Debug then return end
+    print('[OutlawTwinsCoder]', ...)
+end
+
+function Outlaws.Luck(method)
+    local pool = (Config.Success[method] or 0)
+    local roll = math.random(100)
+    return roll <= pool, roll, pool
+end
+
+function OutlawTwins.Cold(src)
+    local now = os.time() * 1000
+    local last = _Book[src] or 0
+    return (now - last) < Config.Cooldown, (Config.Cooldown - (now - last))
+end
+
+function Outlaw.Bag(xPlayer)
+    local parts = {}
+
+    if Config.Reward.black_money and Config.Reward.black_money.max > 0 then
+        local amount = math.random(Config.Reward.black_money.min, Config.Reward.black_money.max)
+        if amount > 0 then
+            if xPlayer and xPlayer.addAccountMoney then
+                xPlayer.addAccountMoney('black_money', amount)
+            elseif xPlayer and xPlayer.addMoney then
+                xPlayer.addMoney(amount)
+            end
+            parts[#parts+1] = ('$%d (sale)'):format(amount)
+        end
+    end
+
+    if Config.Reward.items then
+        for _, it in ipairs(Config.Reward.items) do
+            if math.random(100) <= (it.chance or 100) then
+                local count = math.random(it.min or 1, it.max or 1)
+                exports.ox_inventory:AddItem((xPlayer and xPlayer.source) or source, it.name, count)
+                parts[#parts+1] = (('%dx %s'):format(count, it.name))
+            end
+        end
+    end
+    return table.concat(parts, ', ')
+end
+
+RegisterNetEvent(_ATTEMPT, function(m)
+    local src = source
+    local xPlayer = ESX and ESX.GetPlayerFromId and ESX.GetPlayerFromId(src)
+    local ok, roll, pool = Outlaws.Luck((m=='gun') and 'gun' or 'knife')
+
+    if ok then
+        local cd, left = OutlawTwins.Cold(src)
+        if cd then
+            TriggerClientEvent(_RESULT, src, false, m, nil)
+            OutlawLog(('CD %dms for %d'):format(left, src))
+            return
+        end
+        local s = Outlaw.Bag(xPlayer)
+        _Book[src] = (os.time() * 1000)
+        TriggerClientEvent(_RESULT, src, true, m, s)
+        OutlawLog(('OK %s %d/%d -> %s'):format(m, roll, pool, s))
+    else
+        TriggerClientEvent(_RESULT, src, false, m, nil)
+        OutlawLog(('FAIL %s %d/%d'):format(m, roll, pool))
+    end
+end)
