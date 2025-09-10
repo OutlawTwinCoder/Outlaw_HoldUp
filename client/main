@@ -1,0 +1,161 @@
+
+-- outlaw_Holdup - Client (Outlaw-style, relaxed conditions)
+local Outlaw, Outlaws, OutlawTwins, OutlawTwinsCoder = {}, {}, {}, {}
+local robbed = {}
+local __EV = ('outlaw'..'_holdup')
+local _ATTEMPT = __EV..':'..('at'..'tempt')
+local _RESULT  = __EV..':'..('re'..'sult')
+
+local _P = PlayerPedId
+local _G = GetGameTimer
+
+local function OutlawNotice(t)
+    BeginTextCommandThefeedPost('STRING')
+    AddTextComponentSubstringPlayerName(t)
+    EndTextCommandThefeedPostTicker(false, false)
+end
+
+function OutlawTwinsCoder.Check(entity)
+    if not DoesEntityExist(entity) then return false end
+    if IsPedAPlayer(entity) then return false end
+    if IsEntityDead(entity) then return false end
+    if not IsPedHuman(entity) then return false end
+    if IsPedInAnyVehicle(entity, false) then return false end
+    return true
+end
+
+local function dist(a, b)
+    local ca, cb = GetEntityCoords(a), GetEntityCoords(b)
+    return #(ca - cb)
+end
+
+function OutlawTwins.Behind(me, target)
+    local a = GetEntityCoords(me); local b = GetEntityCoords(target)
+    local dx,dy,dz = a.x-b.x, a.y-b.y, a.z-b.z
+    local d = math.sqrt(dx*dx+dy*dy+dz*dz)
+    if d < 0.001 then return false end
+    local f = GetEntityForwardVector(target)
+    local dot = f.x*dx + f.y*dy + f.z*dz
+    local cosang = dot / d
+    -- assoupli (<= 0 -> > 90° derrière)
+    return cosang <= 0.0
+end
+
+function Outlaws.Circle(ms, label)
+    local ok, lib = pcall(function() return exports.ox_lib end)
+    if ok and lib then
+        return lib:progressCircle({
+            duration = ms,
+            position = 'middle',
+            useWhileDead = false,
+            canCancel = true,
+            label = label or '...'
+        })
+    else
+        local ped = _P()
+        local untilTime = _G() + (ms or 2000)
+        TaskStartScenarioInPlace(ped, 'WORLD_HUMAN_STAND_IMPATIENT', 0, true)
+        while _G() < untilTime do
+            DisableControlAction(0, 21, true)
+            DisableControlAction(0, 24, true)
+            DisableControlAction(0, 25, true)
+            DisableControlAction(0, 22, true)
+            Wait(0)
+        end
+        ClearPedTasks(ped)
+        return true
+    end
+end
+
+function Outlaw.Marked(e)
+    robbed[e] = true
+    local ent = Entity(e)
+    if ent and ent.state then ent.state:set('OutlawTwinsCoder', true, true) end
+end
+function Outlaw.Was(e)
+    if robbed[e] then return true end
+    local ent = Entity(e)
+    return ent and ent.state and ent.state.OutlawTwinsCoder == true
+end
+
+function OutlawTwinsCoder.Pose(p)
+    if not DoesEntityExist(p) then return end
+    ClearPedTasksImmediately(p)
+    TaskStandStill(p, 8000)
+    TaskHandsUp(p, 8000, _P(), -1, true)
+    SetBlockingOfNonTemporaryEvents(p, true)
+    SetPedFleeAttributes(p, 0, false)
+end
+function OutlawTwins.Run(p)
+    if not DoesEntityExist(p) then return end
+    SetBlockingOfNonTemporaryEvents(p, false)
+    TaskSmartFleePed(p, _P(), 100.0, -1, true, true)
+end
+
+-- Conditions plus tolérantes: on affiche l'option si on est proche et armé
+function Outlaw.Pointable(entity)
+    local me = _P()
+    if not OutlawTwinsCoder.Check(entity) then return false end
+    if dist(me, entity) > (Config.TargetDistance or 2.5) + 0.5 then return false end
+    return IsPedArmed(me, 4) -- arme à feu en main
+end
+
+function Outlaw.Sliceable(entity)
+    local me = _P()
+    if not OutlawTwinsCoder.Check(entity) then return false end
+    if dist(me, entity) > 1.6 then return false end
+    if not IsPedArmed(me, 1) then return false end -- arme de mêlée (couteau & co)
+    if not OutlawTwins.Behind(me, entity) then return false end
+    return true
+end
+
+CreateThread(function()
+    exports.ox_target:addGlobalPed({
+        {
+            name = 'Outlaw:Gun',
+            icon = 'fa-solid fa-gun',
+            label = 'Braquer (arme à feu)',
+            distance = (Config.TargetDistance or 2.5) + 0.5,
+            canInteract = function(ent) return not Outlaw.Was(ent) and Outlaw.Pointable(ent) end,
+            onSelect = function(data)
+                local t = data.entity
+                if Outlaw.Was(t) then return end
+                OutlawTwinsCoder.Pose(t)
+                if not Outlaws.Circle(Config.Durations.gun, 'Il vide ses poches...') then
+                    OutlawNotice('~r~Braquage annulé.')
+                    OutlawTwins.Run(t)
+                    return
+                end
+                TriggerServerEvent(_ATTEMPT, 'gun')
+                Outlaw.Marked(t)
+                OutlawTwins.Run(t)
+            end
+        },
+        {
+            name = 'Outlaw:Knife',
+            icon = 'fa-solid fa-knife',
+            label = 'Vol à la tire (couteau)',
+            distance = 1.8,
+            canInteract = function(ent) return not Outlaw.Was(ent) and Outlaw.Sliceable(ent) end,
+            onSelect = function(data)
+                local t = data.entity
+                if Outlaw.Was(t) then return end
+                if not Outlaws.Circle(Config.Durations.knife, 'Vol discret...') then
+                    OutlawNotice('~r~Vol annulé.')
+                    return
+                end
+                TriggerServerEvent(_ATTEMPT, 'knife')
+                Outlaw.Marked(t)
+                if math.random(100) <= 25 then OutlawTwins.Run(t) end
+            end
+        }
+    })
+end)
+
+RegisterNetEvent(_RESULT, function(ok, m, s)
+    if ok then
+        OutlawNotice(((m=='gun') and '~g~Braquage réussi ! ~s~' or '~g~Vol réussi ! ~s~')..(s or ''))
+    else
+        OutlawNotice('~r~Raté ! La cible panique et s\'échappe.')
+    end
+end)
